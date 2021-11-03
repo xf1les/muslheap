@@ -635,16 +635,17 @@ class Chunkinfo(gdb.Command):
         # SLOT: Check OVERFLOWs
         if reserved != -1:
             ud_overflow = get_ptr_value_at(slot_end - reserved, 'uint8_t')
-            rs_overflow = get_ptr_value_at(slot_end - 5,        'uint8_t')
             if not ud_overflow:
                 P("OVERFLOW (user data)", 0)
             else:
                 P("OVERFLOW (user data)", _hex(ud_overflow), 
                                 "EXPECT: *(uint8_t*)(%s) == 0" % _hex(slot_end - reserved))
-            if not rs_overflow:
-                P("OVERFLOW  (reserved)", 0)
-            else:
-                P("OVERFLOW  (reserved)", _hex(rs_overflow), 
+            if reserved >= 5:
+                rs_overflow = get_ptr_value_at(slot_end - 5, 'uint8_t')
+                if not rs_overflow:
+                    P("OVERFLOW  (reserved)", 0)
+                else:
+                    P("OVERFLOW  (reserved)", _hex(rs_overflow),
                                 "EXPECT: *(uint8_t*)(%s) == 0" % _hex(slot_end - 5))
         else:
             P("OVERFLOW (user data)", "N/A (reserved size is invaild)")
