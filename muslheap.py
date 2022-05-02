@@ -25,6 +25,10 @@ SIZE_CLASSES = [
 UNIT = 16
 IB   = 4
 
+# http://git.musl-libc.org/cgit/musl/tree/src/malloc/mallocng/malloc.c?h=v1.2.2#n40
+# `ctx` (or `__malloc_context`) contains mallocng global status information (such as `active` and `free_meta_head`)
+CTX = None # May be modified by check_mallocng()
+
 # Coloring functions
 RED_BOLD   = lambda x : "\033[1;31m" + str(x) + "\033[m"
 GREEN_BOLD = lambda x : "\033[1;32m" + str(x) + "\033[m"
@@ -76,16 +80,23 @@ def get_ptr_value_at(addr, type):
 def get_symbol_value(name):
     ''' Get gdb.Value object for given symbol '''
     sym, _ = gdb.lookup_symbol(name)
-    assert sym != None
-    return sym.value()
+    if sym != None:
+        return sym.value()
+    else:
+        return None
 
 def check_mallocng():
-    ''' Check if mallocng is availble on current envvironment
+    ''' Check if mallocng is availble on current environment
     
-    It simply checks if `__malloc_context` symbol is existed.
+    It simply checks if `__malloc_context` symbol is existed. If so, set the symbol vaule found as `CTX`.
     '''
-    sym, _ = gdb.lookup_symbol("__malloc_context")
-    if sym == None:
+    global CTX
+
+    # ~ if CTX != None:
+        # ~ return True
+
+    sv = get_symbol_value('__malloc_context')
+    if sv == None:
         err_msg = """\
 ERROR: can't find musl-libc debug symbols!
 
@@ -94,6 +105,8 @@ muslheap.py requires musl-libc 1.2.1+ with debug symbols installed.
 Either debug symbols are not installed or broken, or a libc without mallocng support (e.g. musl-libc < 1.2.1 or glibc) is used."""
         print(err_msg)
         return False
+    else:
+        CTX = sv
     return True
 
 def get_libcbase():
@@ -218,8 +231,7 @@ class MUSL_FUNC():
     def is_bouncing(sc):
         # http://git.musl-libc.org/cgit/musl/tree/src/malloc/mallocng/meta.h?h=v1.2.2#n283
 
-        ctx = get_symbol_value('__malloc_context')
-        return (sc - 7 < 32) and int(ctx['bounces'][sc - 7]) >= 100
+        return (sc - 7 < 32) and int(CTX['bounces'][sc - 7]) >= 100
 
     @staticmethod
     def okay_to_free(g):
@@ -228,11 +240,9 @@ class MUSL_FUNC():
         if not g['freeable']:
             return False
 
-        ctx = get_symbol_value('__malloc_context')
-
         sc     = int(g['sizeclass'])
         cnt    = int(g['last_idx']) + 1
-        usage  = int(ctx['usage_by_class'][sc])
+        usage  = int(CTX['usage_by_class'][sc])
         stride = MUSL_FUNC.get_stride(g)
 
         if sc >= 48 or stride < UNIT * SIZE_CLASSES[sc] \
@@ -258,16 +268,14 @@ class Heapinfo(gdb.Command):
         printer = Printer(header_clr=MGNT_BOLD, content_clr=WHT_BOLD, header_rjust=16)
         P = printer.print
         
-        ctx = get_symbol_value('__malloc_context')
-
         # Print out useful fields in __malloc_context
-        P("secret",           _hex(ctx['secret']))
-        P("mmap_counter",     _hex(ctx['mmap_counter']))
-        P("avail_meta",       BLUE_BOLD(_hex(ctx['avail_meta'])))
-        P("avail_meta_count", ctx['avail_meta_count'])
+        P("secret",           _hex(CTX['secret']))
+        P("mmap_counter",     _hex(CTX['mmap_counter']))
+        P("avail_meta",       BLUE_BOLD(_hex(CTX['avail_meta'])))
+        P("avail_meta_count", CTX['avail_meta_count'])
         
         # Walk free_meta chain
-        m = head = ctx['free_meta_head']
+        m = head = CTX['free_meta_head']
         if head:
             s = BLUE_BOLD(_hex(head))
             try:
@@ -285,7 +293,7 @@ class Heapinfo(gdb.Command):
         # Walk active bin
         printer.set(header_clr=GREEN_BOLD, content_clr=None)
         for i in range(48):
-            m = head = ctx['active'][i]
+            m = head = CTX['active'][i]
             if head:
                 s = BLUE_BOLD(_hex(m))
                 try:
@@ -483,7 +491,7 @@ class Chunkinfo(gdb.Command):
                         
         # META: Check area->check
         area   = get_ptr_value_at(int(meta) & -4096, 'struct meta_area')
-        secret = get_symbol_value('__malloc_context')['secret']
+        secret = CTX['secret']
         if area['check'] == secret:
             P("area->check", _hex(area['check']))
         else:
@@ -537,8 +545,6 @@ class Chunkinfo(gdb.Command):
     def display_nontrivial_free(self, ib, group):
         ''' Display the result of nontrivial_free() '''
         
-        ctx = get_symbol_value('__malloc_context')
-
         printer = Printer(header_clr=MGNT_BOLD, content_clr=GREEN_BOLD)
         P = printer.print
         print()
@@ -562,7 +568,7 @@ class Chunkinfo(gdb.Command):
             else:
                 P("Result of nontrivial_free()", "free_group, free_meta")
                 print_fg = print_fm = 1
-        elif not mask and ctx['active'][sizeclass] != meta:
+        elif not mask and CTX['active'][sizeclass] != meta:
             if sizeclass < 48:
                 P("Result of nontrivial_free()", "queue (active[%d])" % sizeclass)
             else:
