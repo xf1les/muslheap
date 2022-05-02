@@ -195,6 +195,55 @@ class Printer():
             ctx = "%s %s"    % (header, content)
         print(ctx)
 
+class MUSL_FUNC():
+    '''Each static method in this class stimulates the corresponding function in musl-libc C code'''
+
+    @staticmethod
+    def get_stride(g):
+        # http://git.musl-libc.org/cgit/musl/tree/src/malloc/mallocng/meta.h?h=v1.2.2#n175
+
+        last_idx  = int(g['last_idx'])
+        maplen    = int(g['maplen'])
+        sizeclass = int(g['sizeclass'])
+
+        if not last_idx and maplen:
+            return maplen * 4096 - UNIT
+        elif sizeclass < 48:
+            return SIZE_CLASSES[sizeclass] * UNIT
+        else:
+            # Return None if we failed to get stride
+            return None
+
+    @staticmethod
+    def is_bouncing(sc):
+        # http://git.musl-libc.org/cgit/musl/tree/src/malloc/mallocng/meta.h?h=v1.2.2#n283
+
+        ctx = get_symbol_value('__malloc_context')
+        return (sc - 7 < 32) and int(ctx['bounces'][sc - 7]) >= 100
+
+    @staticmethod
+    def okay_to_free(g):
+        # http://git.musl-libc.org/cgit/musl/tree/src/malloc/mallocng/free.c?h=v1.2.2#n38
+
+        if not g['freeable']:
+            return False
+
+        ctx = get_symbol_value('__malloc_context')
+
+        sc     = int(g['sizeclass'])
+        cnt    = int(g['last_idx']) + 1
+        usage  = int(ctx['usage_by_class'][sc])
+        stride = MUSL_FUNC.get_stride(g)
+
+        if sc >= 48 or stride < UNIT * SIZE_CLASSES[sc] \
+                    or (not g['maplen'])                \
+                    or g['next'] != g                   \
+                    or (not self.is_bouncing(sc))            \
+                    or (9 * cnt <= usage and cnt < 20):
+            return True
+
+        return False
+
 class Heapinfo(gdb.Command):
     ''' Display mallocng global infomation, like `heapinfo` command in Pwngdb'''
     
@@ -315,24 +364,6 @@ class Chunkinfo(gdb.Command):
             "offset32"         :  get_ptr_value_at(p-8, 'uint32_t'),
         }
         return ib
-    
-    def get_stride(self, group):
-        # http://git.musl-libc.org/cgit/musl/tree/src/malloc/mallocng/meta.h?h=v1.2.2#n175
-        
-        meta = group['meta']
-        
-        last_idx  = int(meta['last_idx'])
-        maplen    = int(meta['maplen'])
-        sizeclass = int(meta['sizeclass'])
-        
-        if (not last_idx) and maplen:
-            return maplen * 4096 - UNIT
-        # ~ else:
-        elif sizeclass < 48:
-            return SIZE_CLASSES[sizeclass] * UNIT   
-        
-        # Return None if we failed to get stride
-        return None
     
     def display_ib_meta(self, p, ib):
         ''' Display in-band meta '''
@@ -462,14 +493,14 @@ class Chunkinfo(gdb.Command):
         # META: Check sizeclass
         sc = int(meta['sizeclass'])
         if sc == 63:
-            stride = self.get_stride(group)
+            stride = MUSL_FUNC.get_stride(meta)
             if stride != None:
                 P("sizeclass", "63 " +  WHT_BOLD(" (stride: 0x%lx)" % stride))
             else:
                 P("sizeclass", "63 " +  WHT_BOLD(" (stride: ?)"))
         elif sc < 48:
             sc_stride   = UNIT * SIZE_CLASSES[sc]
-            real_stride = self.get_stride(group)
+            real_stride = MUSL_FUNC.get_stride(meta)
             if real_stride == None:
                 stride_tips = WHT_BOLD("(stride: 0x%lx, real_stride: ?)" % sc_stride)
             elif sc_stride != real_stride:
@@ -507,29 +538,6 @@ class Chunkinfo(gdb.Command):
         ''' Display the result of nontrivial_free() '''
         
         ctx = get_symbol_value('__malloc_context')
-        
-        def is_bouncing(sc):
-            # http://git.musl-libc.org/cgit/musl/tree/src/malloc/mallocng/meta.h?h=v1.2.2#n283
-            return (sc - 7 < 32) and int(ctx['bounces'][sc - 7]) >= 100
-        
-        def okay_to_free(m):
-            # http://git.musl-libc.org/cgit/musl/tree/src/malloc/mallocng/free.c?h=v1.2.2#n38
-            if not m['freeable']:
-                return False
-            
-            sc     = int(m['sizeclass'])
-            cnt    = int(m['last_idx']) + 1
-            usage  = int(ctx['usage_by_class'][sc])
-            stride = self.get_stride(group)
-            
-            if sc >= 48 or stride < UNIT * SIZE_CLASSES[sc] \
-                        or (not m['maplen'])                \
-                        or m['next'] != m                   \
-                        or (not is_bouncing(sc))            \
-                        or (9 * cnt <= usage and cnt < 20):
-                return True
-                
-            return False
 
         printer = Printer(header_clr=MGNT_BOLD, content_clr=GREEN_BOLD)
         P = printer.print
@@ -543,7 +551,7 @@ class Chunkinfo(gdb.Command):
         
         mask = int(meta['freed_mask'] | meta['avail_mask'])
         slf  = (1 << index) & UINT32_MASK
-        if mask + slf == (2 << meta['last_idx']) - 1 and okay_to_free(meta):
+        if mask + slf == (2 << meta['last_idx']) - 1 and MUSL_FUNC.okay_to_free(meta):
             if meta['next']:
                 if sizeclass < 48:
                     P("Result of nontrivial_free()", "dequeue, free_group, free_meta")
@@ -687,7 +695,7 @@ class Chunkinfo(gdb.Command):
             return
 
         # Check if we have vaild stride / sizeclass
-        stride = self.get_stride(group)
+        stride = MUSL_FUNC.get_stride(group['meta'])
         if stride != None:
             # Display the result of nontrivial_free()
             self.display_nontrivial_free(ib, group)
