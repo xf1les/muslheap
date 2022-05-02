@@ -304,7 +304,7 @@ class Chunkinfo(gdb.Command):
         super(Chunkinfo, self).__init__("mchunkinfo", gdb.COMMAND_USER)
         self.dont_repeat()
         
-    def get_ib_meta(self, p):
+    def parse_ib_meta(self, p):
         ''' Parse 4-byte in-band meta and offset32 '''
         
         ib = {
@@ -312,11 +312,8 @@ class Chunkinfo(gdb.Command):
             "index"            :  get_ptr_value_at(p-3, 'uint8_t') & 0x1f,
             "reserved_in_band" : (get_ptr_value_at(p-3, 'uint8_t') & 0xe0) >> 5,
             "overflow_in_band" :  get_ptr_value_at(p-4, 'uint8_t'),
+            "offset32"         :  get_ptr_value_at(p-8, 'uint32_t'),
         }
-        
-        if ib['overflow_in_band']:
-            ib['offset32'] = get_ptr_value_at(p-8, 'uint32_t')
-            
         return ib
     
     def get_stride(self, group):
@@ -665,7 +662,11 @@ class Chunkinfo(gdb.Command):
         p = p.cast(gdb.lookup_type('uint8_t').pointer()) 
         
         # Parse in-band meta
-        ib = self.get_ib_meta(p)
+        try:
+            ib = self.parse_ib_meta(p)
+        except gdb.error as e:
+            print(RED_BOLD("ERROR:"), str(e))
+            return
         
         # Display in-band meta information
         self.display_ib_meta(p, ib)
@@ -679,7 +680,11 @@ class Chunkinfo(gdb.Command):
         group = get_ptr_value_at(addr, 'struct group')
         
         # Display (out-band) meta information
-        self.display_meta(ib, group)
+        try:
+            self.display_meta(ib, group)
+        except gdb.error as e:
+            print(RED_BOLD("ERROR:"), str(e))
+            return
 
         # Check if we have vaild stride / sizeclass
         stride = self.get_stride(group)
@@ -692,7 +697,11 @@ class Chunkinfo(gdb.Command):
             slot_end   = slot_start + stride - IB
             
             # Display slot information
-            self.display_slot(p, ib, slot_start, slot_end)
+            try:
+                self.display_slot(p, ib, slot_start, slot_end)
+            except gdb.error as e:
+                print(RED_BOLD("ERROR:"), str(e))
+                return
         else:
             print(RED_BOLD("\nCan't get slot and nontrivial_free() information due to invaild sizeclass"))
 
