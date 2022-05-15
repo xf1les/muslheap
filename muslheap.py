@@ -109,6 +109,27 @@ Either debug symbols are not installed or broken, or a libc without mallocng sup
         CTX = sv
     return True
 
+def parse_vmmap():
+    ''' Parse memory mappings of currently running process.
+
+        It returns a list of tuples like `(start, end, size, offset, objfile)`.
+    '''
+
+    result = []
+    lines = gdb.execute("info proc mappings", False, True).split('\n')
+    if not lines or len(lines) < 4:
+        print(RED_BOLD("Warning: can't get memory mappings!\n"))
+    else:
+        for line in lines[4:]:
+            mapping = re.findall(r"(0x\S+)\s+(0x\S+)\s+(0x\S+)\s+(0x\S+)\s+(.*)", line)
+            if mapping and mapping[0] and len(mapping[0]) == 5: # Skip mapping without objfile
+                start, end, size, offset, objfile = mapping[0]
+                # Convert to integer type
+                start, end, size, offset = map(lambda x : int(x, 16), [start, end, size, offset])
+                objfile = objfile.strip()
+                result.append((start, end, size, offset, objfile))
+    return result
+
 def get_libcbase():
     ''' Find and get libc.so base address from current memory mappings '''
     
@@ -119,22 +140,18 @@ def get_libcbase():
         r"^libc\.musl-.+\.so\.1$",
     ]
 
-    lines = gdb.execute("info proc mappings", False, True).split('\n')
-    if not lines or len(lines) < 4:
-        print(RED_BOLD("Warning: can't get memory mappings\n"))
-    else:
-        for line in lines[4:]:
-            mapping = re.findall(r"(0x\S+)\s+(0x\S+)\s+(0x\S+)\s+(0x\S+)\s+(.*)", line)
-            if mapping and mapping[0] and len(mapping[0]) == 5:
-                start, end, size, offset, objfile = mapping[0]
-                if not objfile:
-                    continue
-                objfn = os.path.basename(objfile)
-                for pattern in soname_pattern:
-                    if re.match(pattern, objfn):
-                        return int(start, 16)
-        else:
-            print(RED_BOLD("Warning: can't find musl-libc in memory mappings!\n"))
+    vmmap = parse_vmmap()
+    for mapping in vmmap:
+        objfile = mapping[4]
+        if not objfile or objfile.startswith('['):
+            continue
+        objfn = os.path.basename(objfile)
+        for pattern in soname_pattern:
+            if re.match(pattern, objfn):
+                start = mapping[0]
+                return start
+
+    print(RED_BOLD("Warning: can't find musl-libc in memory mappings!\n"))
 
     # Return None if we can't get libcbase
     return None
@@ -809,6 +826,32 @@ class Chunkinfo(gdb.Command):
         
         # META: Check freeable
         P("freeable", meta['freeable'])
+
+        # META: Check group allocation method
+        if not meta['freeable']:
+            # This group is a donated memory.
+            # That is, it was placed in an unused RW memory area from a object file loaded by ld.so.
+            # (See http://git.musl-libc.org/cgit/musl/tree/src/malloc/mallocng/donate.c?h=v1.2.2#n10)
+
+            group_addr = int(group.address)
+
+            # Find out which object file in memory mappings donated this memory.
+            vmmap = parse_vmmap()
+            for mapping in vmmap:
+                start, end, objfile = mapping[0], mapping[1], mapping[4]
+                if not objfile or objfile.startswith('['):
+                    continue
+                if group_addr > start and group_addr < end:
+                    method = "donated from %s" % WHT_BOLD(objfile)
+                    break
+            else:
+                method = "donated from an unknown object file"
+        elif not meta['maplen']:
+            # XXX: Find out which group is used.
+            method = WHT_BOLD("another group's slot")
+        else:
+            method = WHT_BOLD("individual mmap")
+        print(MGNT_BOLD("\nGroup allocation method : ") + method)
 
         # Display slot status map
         print(generate_slot_map(meta, index))
