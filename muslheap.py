@@ -129,6 +129,32 @@ def get_libcbase():
     # Return None if we can't get libcbase
     return None
 
+def generate_mask_str(avail_mask, freed_mask):
+    ''' Generate pretty-print string for avail_mask and freed_mask
+
+        Example:
+           avail_mask : 0x7f80 (0b111111110000000)
+           freed_mask : 0x0    (0b000000000000000)
+    '''
+
+    # Hex strings for avail_mask and freed_mask
+    ah = _hex(avail_mask)
+    fh = _hex(freed_mask)
+    maxlen = max(len(ah), len(fh))
+    ah = ah.ljust(maxlen)   # fills ' '
+    fh = fh.ljust(maxlen)
+
+    # Binary strings for avail_mask and freed_mask
+    ab = _bin(avail_mask).replace('0b', '')
+    fb = _bin(freed_mask).replace('0b', '')
+    maxlen = max(len(ab), len(fb))
+    ab = ab.zfill(maxlen)   # fills '0'
+    fb = fb.zfill(maxlen)
+
+    avail_str = ah + WHT_BOLD(" (0b%s)" % ab)
+    freed_str = fh + WHT_BOLD(" (0b%s)" % fb)
+    return (avail_str, freed_str)
+
 # Wrapper functions for Python-builtin hex() and bin()
 #
 # This part fixes the following error:
@@ -354,6 +380,200 @@ class Magic(gdb.Command):
             header = MGNT_BOLD(name.ljust(ml)) + BLUE_BOLD(" (0x%lx)" % get_offset(ptr))
             print("%s : 0x%s" % (header, value_hex))
 
+class Findslot(gdb.Command):
+    ''' Find a mallocng slot where the given memory is inside
+
+        Usage: mfindslot <the memory address to explore>
+    '''
+
+    def __init__(self):
+        super(Findslot, self).__init__("mfindslot", gdb.COMMAND_USER)
+        self.dont_repeat()
+
+    def search_chain(self, p):
+        ''' Find slots where `p` is inside by traversing `ctx.meta_area_head` chain '''
+
+        p = int(p)
+
+        result = []
+        try:
+            # Traverse every meta object in `meta_area_head` chain
+            meta_area = CTX['meta_area_head']
+            while meta_area:
+                for i in range(int(meta_area['nslots'])):
+                    meta = meta_area['slots'][i]
+                    if not meta['mem']:
+                        # Skip unused
+                        continue
+                    stride = MUSL_FUNC.get_stride(meta)
+                    if stride == None:
+                        # Skip invaild stride
+                        continue
+                    storage     = int(meta['mem']['storage'].address)
+                    slot_count  = int(meta['last_idx']) + 1
+                    group_start = int(meta['mem'])
+                    group_end   = storage + slot_count * stride - IB
+                    # Check if `p` is in the range of the group owned by this meta object
+                    if p >= group_start and p < group_end:
+                        if p >= (storage - IB):
+                            # Calculate the index of the slot where `p` is inside
+                            slot_index = (p - (storage - IB)) // stride
+                        else:
+                            # `p` is above the first slot, which means it's not inside of any slots in this group
+                            # However, we set the slot index to 0 (the first slot). It's acceptable in most cases.
+                            slot_index = 0
+                        # We need a pointer (struct meta*), not the object itself
+                        m = get_ptr_at(meta.address, 'struct meta')
+                        result.append((m, slot_index))
+                meta_area = meta_area['next']
+        except gdb.MemoryError as e:
+            print(RED_BOLD("ERROR:"), str(e))
+
+        return result
+
+    def display_meta(self, meta):
+        ''' Display slot information (No integrity check due to leak of in-band meta) '''
+
+        print(WHT_BOLD("\n================== META ================== ") + "(at %s)" % _hex(meta))
+        printer = Printer(header_clr=MGNT_BOLD, content_clr=BLUE_BOLD, header_rjust=13)
+        P = printer.print
+
+        avail_mask = meta['avail_mask']
+        freed_mask = meta['freed_mask']
+        avail_str, freed_str = generate_mask_str(avail_mask, freed_mask)
+
+        # META: Check mem
+        P("mem", _hex(meta['mem']))
+        # META: Check last_idx
+        P("last_idx", meta['last_idx'])
+        # META: Check avail_mask
+        P("avail_mask", avail_str)
+        # META: Check freed_mask
+        P("freed_mask", freed_str)
+
+        # META: Check area->check
+        area   = get_ptr_value_at(int(meta) & -4096, 'struct meta_area')
+        secret = CTX['secret']
+        if area['check'] == secret:
+            P("area->check", _hex(area['check']))
+        else:
+            P("area->check", _hex(area['check']),
+                        "EXPECT: *(0x%lx) == 0x%lx" % (int(meta) & -4096, secret))
+
+        # META: Check sizeclass
+        sc = int(meta['sizeclass'])
+        if sc == 63:
+            stride = MUSL_FUNC.get_stride(meta)
+            if stride != None:
+                P("sizeclass", "63 " +  WHT_BOLD(" (stride: 0x%lx)" % stride))
+            else:
+                P("sizeclass", "63 " +  WHT_BOLD(" (stride: ?)"))
+        elif sc < 48:
+            sc_stride   = UNIT * SIZE_CLASSES[sc]
+            real_stride = MUSL_FUNC.get_stride(meta)
+            if real_stride == None:
+                stride_tips = WHT_BOLD("(stride: 0x%lx, real_stride: ?)" % sc_stride)
+            elif sc_stride != real_stride:
+                stride_tips = WHT_BOLD("(stride: 0x%lx, real_stride: 0x%lx)" % (sc_stride, real_stride))
+            else:
+                stride_tips = WHT_BOLD("(stride: 0x%lx)" % sc_stride)
+            P("sizeclass", "%d %s" % (sc, stride_tips))
+        else:
+            P("sizeclass", sc, "EXPECT: sizeclass < 48 || sizeclass == 63")
+
+        # META: Check maplen
+        P("maplen", _hex(meta['maplen']))
+        # META: Check freeable
+        P("freeable", meta['freeable'])
+
+    def display_slot(self, p, meta, index):
+        ''' Display slot information '''
+
+        print(WHT_BOLD("\n================== SLOT ================== ") )
+        printer = Printer(header_clr=MGNT_BOLD, content_clr=BLUE_BOLD, header_rjust=10)
+        P = printer.print
+
+        stride = MUSL_FUNC.get_stride(meta)
+        slot_start = meta['mem']['storage'][stride * index].address
+
+        # Display the offset from slot to `p`
+        offset = int(p - slot_start)
+        if offset == 0:
+            offset_tips = WHT_BOLD("0")
+        elif offset > 0:
+            offset_tips = GREEN_BOLD('+' + hex(offset))
+        else:
+            offset_tips = RED_BOLD(hex(offset))
+        offset_tips = " (offset: %s)" % offset_tips
+
+        P("address" , BLUE_BOLD(_hex(slot_start)) + offset_tips)
+        P("index"   , index)
+        P("stride"  , hex(stride))
+        P("meta obj", MGNT(_hex(meta)))
+
+        # Check slot status
+        #
+        # In mallocng, a slot can be in one of the following status:
+        #  INUSE - slot is in use by user
+        #  AVAIL - slot is can be allocated to user
+        #  FREED - slot is freed
+        #
+        freed = (meta['freed_mask'] >> index) & 1
+        avail = (meta['avail_mask'] >> index) & 1
+        if not freed and not avail:
+            # Calculate the offset to `user_data` field
+            reserved_in_slot_head = (get_ptr_value_at(slot_start - 3, 'uint8_t') & 0xe0) >> 5
+            if reserved_in_slot_head == 7:
+                cycling_offset = get_ptr_value_at(slot_start - 2, 'uint16_t')
+                ud_offset = cycling_offset * UNIT
+            else:
+                ud_offset = 0
+
+            userdata_ptr = slot_start + ud_offset
+            P("status", "%s (userdata --> %s)" % (WHT_BOLD("INUSE"), BLUE_BOLD(_hex(userdata_ptr))))
+            print("(HINT: use `mchunkinfo %s` to display more details)" % _hex(userdata_ptr))
+        elif not freed and avail:
+            P("status", GREEN_BOLD("AVAIL"))
+        elif freed and not avail:
+            P("status", RED_BOLD("FREED"))
+        else:
+            P("status", WHT_BOLD("?"))
+
+    def invoke(self, arg, from_tty):
+        if not check_mallocng():
+            return
+
+        p = gdb.parse_and_eval(arg)
+        p = p.cast(gdb.lookup_type('uint8_t').pointer())
+
+        # Find slots by traversing `ctx.meta_area_head` chain
+        result = self.search_chain(p)
+        if len(result) == 0:
+            print(RED_BOLD("Not found.") + " This address may not be managed by mallocng or the slot meta is corrupted.")
+            return
+        elif len(result) == 1:
+            meta, index = result[0]
+        else:
+            # Multiple slots owning `p` is found.
+            # It's normal because mallocng may internally use a large slot to hold group with smaller slots.
+            # (See http://git.musl-libc.org/cgit/musl/tree/src/malloc/mallocng/malloc.c?h=v1.2.2#n260)
+
+            # Find slot which is actually managing `p` (the one with the smallest stride).
+            meta, index = result[0]
+            for x in result:
+                if x[0]['sizeclass'] < meta['sizeclass']:
+                    meta, index = x
+
+        print(GREEN_BOLD("Found:"), "slot index is %s, owned by meta object at %s." % (BLUE_BOLD(index), MGNT(_hex(meta))))
+
+        # Display slot and (out-band) meta information about the slot
+        try:
+            self.display_slot(p, meta, index)
+            self.display_meta(meta)
+        except gdb.error as e:
+            print(RED_BOLD("ERROR:"), str(e))
+            return
+
 class Chunkinfo(gdb.Command):
     ''' Display infomation of the memory allocated from mallocng, like `chunkinfo` command in Pwngdb'''
     
@@ -421,32 +641,6 @@ class Chunkinfo(gdb.Command):
     
     def display_meta(self, ib, group):
         ''' Display (out-band) meta information '''
-        
-        def generate_mask_str(avail_mask, freed_mask):
-            ''' Generate pretty-print string for avail_mask and freed_mask
-            
-                Example:
-                   avail_mask : 0x7f80 (0b111111110000000)
-                   freed_mask : 0x0    (0b000000000000000)
-            '''
-            
-            # Hex strings for avail_mask and freed_mask
-            ah = _hex(avail_mask)
-            fh = _hex(freed_mask)
-            maxlen = max(len(ah), len(fh))
-            ah = ah.ljust(maxlen)   # fills ' '
-            fh = fh.ljust(maxlen)
-            
-            # Binary strings for avail_mask and freed_mask
-            ab = _bin(avail_mask).replace('0b', '')
-            fb = _bin(freed_mask).replace('0b', '')
-            maxlen = max(len(ab), len(fb))
-            ab = ab.zfill(maxlen)   # fills '0'
-            fb = fb.zfill(maxlen)
-            
-            avail_str = ah + WHT_BOLD(" (0b%s)" % ab)
-            freed_str = fh + WHT_BOLD(" (0b%s)" % fb)
-            return (avail_str, freed_str)
         
         meta  = group['meta']
         index = ib['index']
@@ -723,3 +917,4 @@ class Chunkinfo(gdb.Command):
 Heapinfo()
 Magic()
 Chunkinfo()
+Findslot()
