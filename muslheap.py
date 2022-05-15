@@ -112,6 +112,13 @@ Either debug symbols are not installed or broken, or a libc without mallocng sup
 def get_libcbase():
     ''' Find and get libc.so base address from current memory mappings '''
     
+    # XXX: any other alternative names for the musl-libc library?
+    soname_pattern = [
+        r"^ld-musl-.+\.so\.1$",
+        r"^libc\.so$",
+        r"^libc\.musl-.+\.so\.1$",
+    ]
+
     lines = gdb.execute("info proc mappings", False, True).split('\n')
     if not lines or len(lines) < 4:
         print(RED_BOLD("Warning: can't get memory mappings\n"))
@@ -120,11 +127,14 @@ def get_libcbase():
             mapping = re.findall(r"(0x\S+)\s+(0x\S+)\s+(0x\S+)\s+(0x\S+)\s+(.*)", line)
             if mapping and mapping[0] and len(mapping[0]) == 5:
                 start, end, size, offset, objfile = mapping[0]
-                # XXX: any alternative name for the musl-libc binary file?
-                if objfile and os.path.basename(objfile) == "libc.so":
-                    return int(start, 16)
+                if not objfile:
+                    continue
+                objfn = os.path.basename(objfile)
+                for pattern in soname_pattern:
+                    if re.match(pattern, objfn):
+                        return int(start, 16)
         else:
-            print(RED_BOLD("Warning: can't find libc.so in memory mappings\n"))
+            print(RED_BOLD("Warning: can't find musl-libc in memory mappings!\n"))
 
     # Return None if we can't get libcbase
     return None
