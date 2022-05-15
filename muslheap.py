@@ -155,6 +155,52 @@ def generate_mask_str(avail_mask, freed_mask):
     freed_str = fh + WHT_BOLD(" (0b%s)" % fb)
     return (avail_str, freed_str)
 
+def generate_slot_map(meta, mask_index=None):
+    ''' Generate a map-like string to display the status of all slots in a group.
+
+        If mask_index is set, mask the specified slot in status map.
+
+        Example:
+           Slot status map: UUUAAAAFFUUUUUUU[U]UUUUUUUUUUUUU (from slot 29 to slot 0)
+            (U: Inuse / A: Available / F: Freed)
+    '''
+
+    legend = " (%s: Inuse / %s: Available / %s: Freed)" % (WHT_BOLD("U"), GREEN_BOLD("A"), RED_BOLD("F"))
+
+    avail_mask = meta['avail_mask']
+    freed_mask = meta['freed_mask']
+    slot_count = int(meta['last_idx']) + 1
+
+    # Generate slot status map
+    mapstr = ""
+    for idx in range(slot_count):
+        avail = avail_mask & 1
+        freed = freed_mask & 1
+        if not freed and not avail:
+            # Inuse
+            s = WHT_BOLD("U")
+        elif not freed and avail:
+            # Available
+            s = GREEN_BOLD("A")
+        elif freed and not avail:
+            # Freed
+            s = RED_BOLD("F")
+        else:
+            s = "?"
+        # Mask the slot with index `mask_index` in the map
+        if idx == mask_index:
+            s = '[' + s + ']'
+        mapstr = s + mapstr
+
+        avail_mask >>= 1
+        freed_mask >>= 1
+
+    if slot_count > 1:
+        mapstr += " (from slot %s to slot %s)" % (BLUE_BOLD(slot_count-1), BLUE_BOLD("0"))
+
+    output = MGNT_BOLD("\nSlot status map: ") + mapstr + '\n' + legend
+    return output
+
 # Wrapper functions for Python-builtin hex() and bin()
 #
 # This part fixes the following error:
@@ -431,7 +477,7 @@ class Findslot(gdb.Command):
 
         return result
 
-    def display_meta(self, meta):
+    def display_meta(self, meta, index):
         ''' Display slot information (No integrity check due to leak of in-band meta) '''
 
         print(WHT_BOLD("\n================== META ================== ") + "(at %s)" % _hex(meta))
@@ -485,6 +531,9 @@ class Findslot(gdb.Command):
         P("maplen", _hex(meta['maplen']))
         # META: Check freeable
         P("freeable", meta['freeable'])
+
+        # Display slot status map
+        print(generate_slot_map(meta, index))
 
     def display_slot(self, p, meta, index):
         ''' Display slot information '''
@@ -569,7 +618,7 @@ class Findslot(gdb.Command):
         # Display slot and (out-band) meta information about the slot
         try:
             self.display_slot(p, meta, index)
-            self.display_meta(meta)
+            self.display_meta(meta, index)
         except gdb.error as e:
             print(RED_BOLD("ERROR:"), str(e))
             return
@@ -750,6 +799,9 @@ class Chunkinfo(gdb.Command):
         
         # META: Check freeable
         P("freeable", meta['freeable'])
+
+        # Display slot status map
+        print(generate_slot_map(meta, index))
 
     def display_nontrivial_free(self, ib, group):
         ''' Display the result of nontrivial_free() '''
