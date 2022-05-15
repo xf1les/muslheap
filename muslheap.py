@@ -644,6 +644,16 @@ class Chunkinfo(gdb.Command):
             if offset16:
                 P("OFFSET_16", _hex(offset16), "EXPECT: *(uint16_t*)(%s) == 0]" % _hex(p - 2))
     
+    def display_group(self, group):
+        ''' Display group information '''
+
+        print(WHT_BOLD("\n================= GROUP ================== ") + "(at %s)" % _hex(group.address))
+        printer = Printer(header_clr=CYAN_BOLD, content_clr=BLUE_BOLD, header_rjust=13)
+        P = printer.print
+
+        P("meta",       _hex(group['meta']))
+        P("active_idx", int(group['active_idx']))
+
     def display_meta(self, ib, group):
         ''' Display (out-band) meta information '''
         
@@ -900,8 +910,9 @@ class Chunkinfo(gdb.Command):
         addr  = p - (offset + 1) * UNIT
         group = get_ptr_value_at(addr, 'struct group')
         
-        # Display (out-band) meta information
+        # Display group and (out-band) meta information
         try:
+            self.display_group(group)
             self.display_meta(ib, group)
         except gdb.error as e:
             print(RED_BOLD("ERROR:"), str(e))
