@@ -320,7 +320,7 @@ class MUSL_FUNC():
         if sc >= 48 or stride < UNIT * SIZE_CLASSES[sc] \
                     or (not g['maplen'])                \
                     or g['next'] != g                   \
-                    or (not self.is_bouncing(sc))            \
+                    or (not MUSL_FUNC.is_bouncing(sc))  \
                     or (9 * cnt <= usage and cnt < 20):
             return True
 
