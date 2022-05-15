@@ -805,8 +805,16 @@ class Chunkinfo(gdb.Command):
         P = printer.print
         
         # SLOT: Check cycling offset
-        cycling_offset = get_ptr_value_at(slot_start - 2, 'uint16_t')
-        userdata_ptr   = slot_start + cycling_offset * UNIT
+        reserved_in_slot_head = (get_ptr_value_at(slot_start - 3, 'uint8_t') & 0xe0) >> 5
+        if reserved_in_slot_head == 7:
+            # If `R` is 7, it indicates that slot header is used to store cycling offset (in `OFF` field)
+            # (See http://git.musl-libc.org/cgit/musl/tree/src/malloc/mallocng/meta.h?h=v1.2.2#n217)
+            cycling_offset = get_ptr_value_at(slot_start - 2, 'uint16_t') # `OFF`
+        else:
+            # Else, slot header is now occupied by in-band meta.
+            # In this case, `userdata` will be located at the beginning of slot.
+            cycling_offset = 0
+        userdata_ptr = slot_start + cycling_offset * UNIT
         P("cycling offset", "%s (--> %s)" % (_hex(cycling_offset), _hex(userdata_ptr)))
         
         # SLOT: Check reserved
