@@ -613,6 +613,11 @@ class Chunkinfo(gdb.Command):
             P("RESERVED", reserved_in_band)
         elif reserved_in_band == 5:
             P("RESERVED", "5" + MGNT_BOLD(" (Use reserved in slot end)"))
+        elif reserved_in_band == 6:
+            # This slot may be used as a group in mallocng internal.
+            # It can't be freed by free() since `reserved_in_band` is illegal.
+            # (See https://git.musl-libc.org/cgit/musl/tree/src/malloc/mallocng/malloc.c?h=v1.2.2#n269)
+            P("RESERVED", "%s %s %s" % (RED_BOLD("6"), YLW_BOLD("[EXPECT: <= 5]"), MGNT_BOLD("(This slot may internally used as a group)")))
         else:
             P("RESERVED", _hex(reserved_in_band), "EXPECT: <= 5") 
 
