@@ -589,6 +589,32 @@ class Findslot(gdb.Command):
         # META: Check freeable
         P("freeable", meta['freeable'])
 
+        # META: Check group allocation method
+        if not meta['freeable']:
+            # This group is a donated memory.
+            # That is, it was placed in an unused RW memory area from a object file loaded by ld.so.
+            # (See http://git.musl-libc.org/cgit/musl/tree/src/malloc/mallocng/donate.c?h=v1.2.2#n10)
+
+            group_addr = int(group.address)
+
+            # Find out which object file in memory mappings donated this memory.
+            vmmap = parse_vmmap()
+            for mapping in vmmap:
+                start, end, objfile = mapping[0], mapping[1], mapping[4]
+                if not objfile or objfile.startswith('['):
+                    continue
+                if group_addr > start and group_addr < end:
+                    method = "donated from %s" % WHT_BOLD(objfile)
+                    break
+            else:
+                method = "donated from an unknown object file"
+        elif not meta['maplen']:
+            # XXX: Find out which group is used.
+            method = WHT_BOLD("another group's slot")
+        else:
+            method = WHT_BOLD("individual mmap")
+        print(MGNT_BOLD("\nGroup allocation method : ") + method)
+
         # Display slot status map
         print(generate_slot_map(meta, index))
 
