@@ -371,17 +371,18 @@ class Heapinfo(gdb.Command):
         # Print out useful fields in __malloc_context
         P("secret",           _hex(CTX['secret']))
         P("mmap_counter",     _hex(CTX['mmap_counter']))
-        P("avail_meta",       BLUE_BOLD(_hex(CTX['avail_meta'])))
-        P("avail_meta_count", CTX['avail_meta_count'])
+
+        # Print out avaible meta objects
+        P("avail_meta",       BLUE_BOLD(_hex(CTX['avail_meta'])) + WHT_BOLD(" (count: %d)" % CTX['avail_meta_count']))
         
-        # Walk free_meta chain
+        # Walk and print out free_meta chain
         m = head = CTX['free_meta_head']
         if head:
             s = BLUE_BOLD(_hex(head))
             try:
                 while head != m['next']:
-                    s += WHT_BOLD(" -> ") + BLUE_BOLD(_hex(m))
                     m = m['next']
+                    s += WHT_BOLD(" -> ") + BLUE_BOLD(_hex(m))
             except gdb.MemoryError:
                 # Most recently accessed memory may be invaild
                 s += RED_BOLD(" (Invaild memory)")
@@ -390,6 +391,29 @@ class Heapinfo(gdb.Command):
         else:
             P("free_meta", WHT_BOLD("0"))
         
+        # Print out avaible meta areas
+        P("avail_meta_area", BLUE_BOLD(_hex(CTX['avail_meta_areas'])) + WHT_BOLD(" (count: %d)" % CTX['avail_meta_area_count']))
+
+        # Walk and print out meta_area chain
+        ma = CTX['meta_area_head']
+        if ma:
+            s = BLUE_BOLD(_hex(ma))
+            try:
+                while ma['next']:
+                    ma = ma['next']
+                    s += WHT_BOLD(" -> ") + BLUE_BOLD(_hex(ma))
+            except gdb.MemoryError:
+                # Most recently accessed memory may be invaild
+                s += RED_BOLD(" (Invaild memory)")
+            finally:
+                P("meta_area_head", s)
+        else:
+            P("meta_area_head", WHT_BOLD("0"))
+        if CTX['meta_area_tail']:
+            P("meta_area_tail", BLUE_BOLD(_hex(CTX['meta_area_tail'])))
+        else:
+            P("meta_area_tail", WHT_BOLD("0"))
+
         # Walk active bin
         printer.set(header_clr=GREEN_BOLD, content_clr=None)
         for i in range(48):
