@@ -715,7 +715,7 @@ class Chunkinfo(gdb.Command):
         if not overflow_in_band:
             group_ptr = p - (offset16 + 1) * UNIT
             P("OVERFLOW", 0)
-            P("OFFSET_16", "%s (--> %s)"     % (_hex(offset16), _hex(group_ptr)))
+            P("OFFSET_16", "%s (group --> %s)" % (_hex(offset16), _hex(group_ptr)))
         else:
             # `offset32` can be used as the offset to group object 
             # instead of `offset16` in IB if `overflow_in_band` is not NULL. 
@@ -726,7 +726,7 @@ class Chunkinfo(gdb.Command):
             group_ptr = p - (offset32 + 1) * UNIT
             P("OVERFLOW", WHT_BOLD(_hex(overflow_in_band)) + MGNT_BOLD(" (Use 32-bit offset)"))
             if offset32 > 0xffff:
-                P("OFFSET_32", "%s (--> %s)" % (_hex(offset32), _hex(group_ptr)))
+                P("OFFSET_32", "%s (group --> %s)" % (_hex(offset32), _hex(group_ptr)))
             else:
                 P("OFFSET_32", _hex(offset32), "EXPECT: > 0xffff")
             if offset16:
@@ -947,7 +947,7 @@ class Chunkinfo(gdb.Command):
             # In this case, `userdata` will be located at the beginning of slot.
             cycling_offset = 0
         userdata_ptr = slot_start + cycling_offset * UNIT
-        P("cycling offset", "%s (--> %s)" % (_hex(cycling_offset), _hex(userdata_ptr)))
+        P("cycling offset", "%s (userdata --> %s)" % (_hex(cycling_offset), _hex(userdata_ptr)))
         
         # SLOT: Check reserved
         reserved_in_band = ib['reserved_in_band']
