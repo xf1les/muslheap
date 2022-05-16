@@ -26,7 +26,7 @@ UNIT = 16
 IB   = 4
 
 # http://git.musl-libc.org/cgit/musl/tree/src/malloc/mallocng/malloc.c?h=v1.2.2#n40
-# `ctx` (or `__malloc_context`) contains mallocng global status information (such as `active` and `free_meta_head`)
+# `ctx` (or `__malloc_context`) contains mallocng internal status (such as `active` and `free_meta_head`)
 CTX = None # May be modified by check_mallocng()
 
 # Coloring functions
@@ -91,9 +91,6 @@ def check_mallocng():
     It simply checks if `__malloc_context` symbol is existed. If so, set the symbol vaule found as `CTX`.
     '''
     global CTX
-
-    # ~ if CTX != None:
-        # ~ return True
 
     sv = get_symbol_value('__malloc_context')
     if sv == None:
@@ -247,6 +244,7 @@ def _hex(x):
         return hex(x)
     except:
         # Clear sign bit with UINT64_MASK
+        # XXX: Does it work in 32-bit arch?
         return hex(int(x) & UINT64_MASK)
 
 def _bin(x):
@@ -308,7 +306,7 @@ class Printer():
         print(ctx)
 
 class MUSL_FUNC():
-    '''Each static method in this class stimulates the corresponding function in musl-libc C code'''
+    '''Each static method in this class simulates the corresponding function in musl-libc C code'''
 
     @staticmethod
     def get_stride(g):
@@ -354,7 +352,10 @@ class MUSL_FUNC():
         return False
 
 class Heapinfo(gdb.Command):
-    ''' Display mallocng global infomation, like `heapinfo` command in Pwngdb'''
+    ''' Display mallocng global information, like `heapinfo` command in Pwngdb
+
+        Usage: mheapinfo
+    '''
     
     def __init__(self):
         super(Heapinfo, self).__init__("mheapinfo", gdb.COMMAND_USER)
@@ -410,7 +411,10 @@ class Heapinfo(gdb.Command):
                     P("active[%d]" % i, s + stride_tips)
 
 class Magic(gdb.Command):
-    ''' Display useful variables and functions in musl-libc, like `magic` command in Pwngdb'''
+    ''' Display useful variables and functions in musl-libc, like `magic` command in Pwngdb
+
+        Usage: mmagic
+    '''
     
     def __init__(self):
         super(Magic, self).__init__("mmagic", gdb.COMMAND_USER)
@@ -454,9 +458,11 @@ class Magic(gdb.Command):
             print("%s : 0x%s" % (header, value_hex))
 
 class Findslot(gdb.Command):
-    ''' Find a mallocng slot where the given memory is inside
+    ''' Find a mallocng slot where the given memory is inside. It works by traversing `ctx.meta_area_head` chain.
 
-        Usage: mfindslot <the memory address to explore>
+        Usage: mfindslot <p>
+          * p - The memory address to explore. It can be an arbitrary location inside a vaild slot.
+
     '''
 
     def __init__(self):
@@ -505,7 +511,7 @@ class Findslot(gdb.Command):
         return result
 
     def display_meta(self, meta, index):
-        ''' Display slot information (No integrity check due to leak of in-band meta) '''
+        ''' Display slot information (No validation check due to leak of in-band meta) '''
 
         print(WHT_BOLD("\n================== META ================== ") + "(at %s)" % _hex(meta))
         printer = Printer(header_clr=MGNT_BOLD, content_clr=BLUE_BOLD, header_rjust=13)
@@ -651,7 +657,13 @@ class Findslot(gdb.Command):
             return
 
 class Chunkinfo(gdb.Command):
-    ''' Display infomation of the memory allocated from mallocng, like `chunkinfo` command in Pwngdb'''
+    ''' Display infomation of the memory allocated from mallocng, like `chunkinfo` command in Pwngdb
+
+        Usage: mchunkinfo <p>
+          * p - A memory address that can be freed by `free()`, usually the one returned from `malloc()`.
+                In general, it should be a pointer to the `user_data` field of an *in-use* slot.
+                (Use `mfindslot` command to explore a memory address at arbitrary offset of a slot)
+    '''
     
     def __init__(self):
         super(Chunkinfo, self).__init__("mchunkinfo", gdb.COMMAND_USER)
