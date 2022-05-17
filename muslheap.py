@@ -595,7 +595,7 @@ class Findslot(gdb.Command):
             # That is, it was placed in an unused RW memory area from a object file loaded by ld.so.
             # (See http://git.musl-libc.org/cgit/musl/tree/src/malloc/mallocng/donate.c?h=v1.2.2#n10)
 
-            group_addr = int(group.address)
+            group_addr = int(meta['mem'])
 
             # Find out which object file in memory mappings donated this memory.
             vmmap = parse_vmmap()
