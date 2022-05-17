@@ -4,7 +4,7 @@ import gdb
 import os
 import re
 
-VERSION = "1.0"
+VERSION = "1.1"
 
 # http://git.musl-libc.org/cgit/musl/tree/src/malloc/mallocng/malloc.c?h=v1.2.2#n12
 SIZE_CLASSES = [
