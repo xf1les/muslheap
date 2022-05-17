@@ -2,7 +2,7 @@
 
 **muslheap** is a simple [GDB](https://www.gnu.org/software/gdb/) plug-in for inspecting mallocng.
 
-This plugin provides additional GDB commands to invalidate mallocng global states and internal data structures (slot, group, meta and so on).
+This plugin provides additional GDB commands to explore mallocng global states and internal data structures (slot, group, meta and so on).
 
 ## What is mallocng
 
@@ -30,41 +30,64 @@ This plugin provides additional GDB commands to invalidate mallocng global state
 
 `echo "source /path/to/muslheap.py" >> ~/.gdbinit`
 
-Requirements:
-* **Python 3.5.2+**
-* **GDB 7.11.1+** with python3 support
-* **musl libc 1.2.1+** with debug symbols
-  * Ubuntu: `apt install musl-dbgsym`
-  * Alpine: `apk add musl-dbg`
+**Requirements:**
+ - **Python 2.7.15+** (Python 3.5.2+ is recommended)
+ - **GDB 7.11.1+** with [python support](https://sourceware.org/gdb/onlinedocs/gdb/Python.html)
+ - **musl libc 1.2.1+** with debug symbols
 
-Older versions of Python and GDB are untested and may not work as expected.
+(Older versions of Python / GDB are untested and may not work as expected)
+
+musl libc debug symbols can be installed from system repository:  
+  - **Ubuntu:** [Enable dbgsym repository](https://wiki.ubuntu.com/Debug%20Symbol%20Packages#Getting_-dbgsym.ddeb_packages), then `apt install musl-dbgsym`
+  - **Alpine Linux:** `apk add musl-dbg`
 
 ## Features
 
-* `mchunkinfo`: Examine a mallocng-allocated memory (slot)
-  * in-band meta and out-band meta (`struct meta` object)
-  * slot infomation (size, reversed size, overflow bytes)
-  * the predictive result of [`nontrivial_free()`](http://git.musl-libc.org/cgit/musl/tree/src/malloc/mallocng/free.c?h=v1.2.2#n140) call in `free()`
+- `mchunkinfo`: Examine a mallocng-allocated memory (slot)
 
-* `mheapinfo`: Display infomation of mallocng allocator.
+- `mfindslot`: Find out the slot where the given memory is inside
 
-* `mmagic`: Display useful variables and functions in musl libc.
+- `mheapinfo`: Display mallocng allocator internal information
 
-## Screenshots
+- `mmagic`: Display the location of important functions and sensitive variables in musl libc
 
-* Display musl-libc and mallocng allocator infomation：
-<img src="./asserts/1.jpg" style="width: 65%; height: 65%" />
+## Getting started
 
-* Examine mallocng memory：
-<img src="./asserts/3.jpg" style="width: 65%; height: 65%" />
+### 1. Explore memory
 
-* Examine overflowed memory：
-<img src="./asserts/4.jpg" style="width: 65%; height: 65%" />
+* **`mchunkinfo`** is used to inspect a mallocng-allocated memory (slot). The memory address given must be the starting address of user data area (`user_data`) inside an *in-use* slot. **In most cases, it should be a pointer returned from `malloc()`.**
 
-* Examine memory with corrupted `struct meta` object：
-<img src="./asserts/5.jpg" style="width: 70%; height: 70%" />
+![a normal memory](https://user-images.githubusercontent.com/55195054/168587403-d8cfb649-048a-4d34-8df9-34bb890c3240.jpg)
 
-## References
+`mchunkinfo` can validate the parsed data (such as in-band meta, meta and overflow bytes) and highlight if one of these validations failed.
+
+![This memory has been overflowed](https://user-images.githubusercontent.com/55195054/168587617-2e5d0bc1-992f-4877-9951-2eed9d607a6c.png)
+
+![This memory has a highly corrupted meta object](https://user-images.githubusercontent.com/55195054/168587712-9a7926fa-3472-4290-a71d-d4f9f9325ec2.png)
+
+* **`mfindslot`** is used to find out which slot the given memory address is inside. It's useful to inspect **a freed slot** (which has no `user_data`) or if you don't know the location of slot's `user_data`.
+
+![](https://user-images.githubusercontent.com/55195054/168610595-0836984a-b3e4-47fa-ac51-f44269ba5896.png)
+
+If the slot is in-use, `mfindslot` will try to determine the address of `user_data`.
+
+![](https://user-images.githubusercontent.com/55195054/168614585-20dd04f7-3db6-476e-9f18-20197c28437f.png)
+
+### 2. Display allocator status
+
+- **`mheapinfo`**: Display mallocng allocator internal information (such as secret cookie, `active` chains and `meta_area` chain). These data are parsed from `__malloc_ctx`.
+
+- **`mmagic`**: Display the location (in offset) of important functions (such as [`system`](https://man7.org/linux/man-pages/man3/system.3.html)) and sensitive variables (such as `__stack_chk_guard`) in musl libc. Useful for binary exploitation and [CTF](https://en.wikipedia.org/wiki/Capture_the_flag_(cybersecurity)) games. 
+
+![](https://user-images.githubusercontent.com/55195054/168616739-54489dd0-7831-46c7-a128-7476a0a7c4e4.png)
+
+## TODO
+
+- [ ] Detailed documentation for mallocng
+- [ ] Check compatibility on 32-bit and non-x86/x64 (aarch64, MIPS etc.) architecture
+- [ ] Add command to display slot usage (`usage_by_classes`) and bounce status (`is_bouncing`) of a sizeclass
+
+## Reference
 
 * [mallocng source code](http://git.musl-libc.org/cgit/musl/tree/src/malloc/mallocng?h=v1.2.2)
 * [mallocng-draft](https://github.com/richfelker/mallocng-draft)
@@ -72,3 +95,4 @@ Older versions of Python and GDB are untested and may not work as expected.
 ## License
 
 The MIT License (MIT)
+
