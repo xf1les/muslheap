@@ -545,6 +545,9 @@ class Findslot(gdb.Command):
         freed_mask = meta['freed_mask']
         avail_str, freed_str = generate_mask_str(avail_mask, freed_mask)
 
+        # META: Check prev, next
+        P("prev", _hex(meta['prev']))
+        P("next", _hex(meta['next']))
         # META: Check mem
         P("mem", _hex(meta['mem']))
         # META: Check last_idx
@@ -806,6 +809,10 @@ class Chunkinfo(gdb.Command):
         printer = Printer(header_clr=MGNT_BOLD, content_clr=BLUE_BOLD, header_rjust=13)
         P = printer.print   
         
+        # META: Check prev, next (no validation)
+        P("prev", _hex(meta['prev']))
+        P("next", _hex(meta['next']))
+
         # META: Check mem
         mem = meta['mem']
         if group.address == mem:
