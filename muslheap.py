@@ -106,10 +106,11 @@ Either debug symbols are not installed or broken, or a libc without mallocng sup
         CTX = sv
     return True
 
-def parse_vmmap():
+def parse_vmmap(file_page_only=False):
     ''' Parse memory mappings of currently running process.
 
-        It returns a list of tuples like `(start, end, size, offset, objfile)`.
+        If file_page_only=True, non file-backed mappings (e.g. anonymous page, stack, heap) will be ignored.
+        It returns a list of tuples like `(start, end, size, offset, perm, objfile)`.
     '''
 
     result = []
@@ -118,13 +119,26 @@ def parse_vmmap():
         print(RED_BOLD("Warning: can't get memory mappings!\n"))
     else:
         for line in lines[4:]:
-            mapping = re.findall(r"(0x\S+)\s+(0x\S+)\s+(0x\S+)\s+(0x\S+)\s+(.*)", line)
-            if mapping and mapping[0] and len(mapping[0]) == 5: # Skip mapping without objfile
-                start, end, size, offset, objfile = mapping[0]
+            if not line.strip():
+                continue
+            mapping = re.findall(r"(0x\S+)\s+(0x\S+)\s+(0x\S+)\s+(0x\S+)\s+(.{4})\s+(.*)", line)
+            if mapping and mapping[0]:
+                if len(mapping[0]) == 5:
+                    # anonymous mapping
+                    objfile = ''
+                    start, end, size, offset, perm = mapping[0]
+                elif len(mapping[0]) == 6:
+                    start, end, size, offset, perm, objfile = mapping[0]
+                else:
+                    print(RED_BOLD("Warning: broken process mappings!\n"))
+                    continue
+                if file_page_only and (objfile == '' or objfile.startswith('[')):
+                    continue
                 # Convert to integer type
                 start, end, size, offset = map(lambda x : int(x, 16), [start, end, size, offset])
-                objfile = objfile.strip()
-                result.append((start, end, size, offset, objfile))
+                result.append((start, end, size, offset, perm, objfile))
+            else:
+                print(RED_BOLD("Warning: unable to parse process mappings!") + " : " + line + "\n")
     return result
 
 def get_libcbase():
@@ -137,12 +151,9 @@ def get_libcbase():
         r"^libc\.musl-.+\.so\.1$",
     ]
 
-    vmmap = parse_vmmap()
+    vmmap = parse_vmmap(file_page_only=True)
     for mapping in vmmap:
-        objfile = mapping[4]
-        if not objfile or objfile.startswith('['):
-            continue
-        objfn = os.path.basename(objfile)
+        objfn = os.path.basename(mapping[5])
         for pattern in soname_pattern:
             if re.match(pattern, objfn):
                 start = mapping[0]
