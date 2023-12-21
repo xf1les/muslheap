@@ -141,6 +141,44 @@ def parse_vmmap(file_page_only=False):
                 print(RED_BOLD("Warning: unable to parse process mappings!") + " : " + line + "\n")
     return result
 
+def get_group_donor_info_string(group_addr):
+    ''' Find group donor in process memory mappings, then return a string describing donor information.
+
+    When a new object file (called "donor") is loaded into memory, musl-libc will try to "donate" its unused writable
+    memory area to mallocng allocator. Donated memory will be regarded as normal mmap-ed memory and can be allocated
+    into slots, except they can't be internally reclaimed to system via munmap() when being freed.
+
+    '''
+    vmmap = parse_vmmap()
+    for mapping in vmmap:
+        start, end, perms, objfile = mapping[0], mapping[1], mapping[4], mapping[5]
+        if start < group_addr < end:
+            # Normally, a donor should be a loaded ELF object file (or an anonymous page belonging to it),
+            # other circumstances should be considered irregular (e.g. an exploit attempt).
+            if objfile == '':
+                objfile = "anonymous page (unnamed,range=0x%lx-0x%lx)" % (start, end)
+            elif objfile == "[stack]":
+                objfile = "(process stack)"
+            elif objfile.startswith("[stack:"):
+                tid = re.findall(r"\[stack:(.*)]", objfile)[0]
+                objfile = "(thread %s stack)" % tid
+            elif objfile == "[vdso]" or objfile == "[vvar]":
+                objfile = "(vDSO memory region)"
+            elif objfile == "[heap]":
+                objfile = "(process brk heap)"
+            elif objfile.startswith("[anon:"):
+                name = re.findall(r"\[anon:(.*)]", objfile)[0]
+                objfile = "anonymous page (name=%s,range=0x%lx-0x%lx)" % (name, start, end)
+            elif objfile.startswith("[anon_shmem:"):
+                name = re.findall(r"\[anon_shmem:(.*)]", objfile)[0]
+                objfile = "anonymous page (shared,name=%s,range=0x%lx-0x%lx)" % (name, start, end)
+            # Check for executable page
+            if 'x' in perms:
+                objfile += " (executable)"
+            return objfile
+    else:
+        return None
+
 def get_libcbase():
     ''' Find and get libc.so base address from current memory mappings '''
     
@@ -612,16 +650,11 @@ class Findslot(gdb.Command):
             group_addr = int(meta['mem'])
 
             # Find out which object file in memory mappings donated this memory.
-            vmmap = parse_vmmap()
-            for mapping in vmmap:
-                start, end, objfile = mapping[0], mapping[1], mapping[4]
-                if not objfile or objfile.startswith('['):
-                    continue
-                if group_addr > start and group_addr < end:
-                    method = "donated from %s" % WHT_BOLD(objfile)
-                    break
+            donor = get_group_donor_info_string(group_addr)
+            if donor is None:
+                method = "donated (failed to find donor!)"
             else:
-                method = "donated from an unknown object file"
+                method = "donated from %s" % WHT_BOLD(donor)
         elif not meta['maplen']:
             # XXX: Find out which group is used.
             method = WHT_BOLD("another group's slot")
@@ -916,16 +949,11 @@ class Chunkinfo(gdb.Command):
             group_addr = int(group.address)
 
             # Find out which object file in memory mappings donated this memory.
-            vmmap = parse_vmmap()
-            for mapping in vmmap:
-                start, end, objfile = mapping[0], mapping[1], mapping[4]
-                if not objfile or objfile.startswith('['):
-                    continue
-                if group_addr > start and group_addr < end:
-                    method = "donated from %s" % WHT_BOLD(objfile)
-                    break
+            donor = get_group_donor_info_string(group_addr)
+            if donor is None:
+                method = "donated (failed to find donor!)"
             else:
-                method = "donated from an unknown object file"
+                method = "donated from %s" % WHT_BOLD(donor)
         elif not meta['maplen']:
             # XXX: Find out which group is used.
             method = WHT_BOLD("another group's slot")
