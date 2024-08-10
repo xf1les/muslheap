@@ -60,22 +60,66 @@ MAGIC_FUNCTIONS = [
 def get_ptr_at(addr, type):
     '''Create a gdb.Value object at given address, then cast it to the pointer of specified datatype
     
+    `type` should be a string or a gdb.Type object. If a string is given, it will be passed to gdb.lookup_type()
+    to get the corresponding gdb.Type object.
+
     Equals to this c statement: 
         return (type*)(addr)
     
     See https://sourceware.org/gdb/onlinedocs/gdb/Values-From-Inferior.html for more information about gdb.Value
     '''
     v = gdb.Value(addr)
-    t = gdb.lookup_type(type).pointer()
-    return v.cast(t)
+    if isinstance(type, str):
+        t = gdb.lookup_type(type)
+    elif not isinstance(type, gdb.Type):
+        print("ERROR: bad type of `type` argument for get_ptr_at(), it should be a string or a gdb.Type object.")
+        return None
+    else:
+        t = type
+    return v.cast(t.pointer())
     
 def get_ptr_value_at(addr, type):
     ''' Get value from given address, then convert it to specified datatype
     
+    `type` should be a string or a gdb.Type object. If a string is given, it will be passed to gdb.lookup_type()
+    to get the corresponding gdb.Type object.
+
     Equals to this c statement: 
         return *(type*)(addr)
     '''
     return get_ptr_at(addr, type).dereference()
+
+def get_musl_internal_type(type):
+    ''' Get the correct gdb.Type object for musl libc internally-defined types
+
+    `type` should be one of the following musl libc internal types shown below:
+      - struct meta_area
+      - struct meta
+      - struct group
+    Otherwise, it will be passed to gdb.lookup_type() directly to get the requested gdb.Type object.
+
+    This is a temporary workaround for gdb.lookup_type() possibly returning the wrong gdb.Type object when looking up a
+    musl libc internal type if the debugging program has defined different types with the same name. It mostly happens
+    with `struct group`, for grp.h, a header file from C standard library, also declares and exports a structure called
+    `group`. So if grp.h is imported, gdb.lookup_type("struct group") may always return the one defined by grp.h but not
+    the musl libc one.
+
+    To mitigate this problem, instead of using gdb.lookup_type(), this function firstly finds the gdb.Value object of
+    a member from `__malloc_context` with the same internal type we requested, and then returns the expected gdb.Type
+    object with its `type` property.
+    '''
+    if type not in ['struct meta_area', 'struct meta', 'struct group']:
+        return gdb.lookup_type(type)
+    if not check_mallocng():
+        print("ERROR: can't get musl libc internal type because __malloc_context symbol is unavailable")
+        return
+    if type == 'struct meta_area':
+        t = CTX['meta_area_head'].type  # struct meta_area*
+    else:
+        t = CTX['free_meta_head'].type  # struct meta*
+        if type == "struct group":
+            t = t['mem'].type  # struct group*
+    return t.target()
 
 def get_symbol_value(name):
     ''' Get gdb.Value object for given symbol '''
@@ -575,7 +619,7 @@ class Findslot(gdb.Command):
                             # However, we set the slot index to 0 (the first slot). It's acceptable in most cases.
                             slot_index = 0
                         # We need a pointer (struct meta*), not the object itself
-                        m = get_ptr_at(meta.address, 'struct meta')
+                        m = get_ptr_at(meta.address, get_musl_internal_type('struct meta'))
                         result.append((m, slot_index))
                 meta_area = meta_area['next']
         except gdb.MemoryError as e:
@@ -607,7 +651,7 @@ class Findslot(gdb.Command):
         P("freed_mask", freed_str)
 
         # META: Check area->check
-        area   = get_ptr_value_at(int(meta) & -4096, 'struct meta_area')
+        area   = get_ptr_value_at(int(meta) & -4096, get_musl_internal_type('struct meta_area'))
         secret = CTX['secret']
         if area['check'] == secret:
             P("area->check", _hex(area['check']))
@@ -888,7 +932,7 @@ class Chunkinfo(gdb.Command):
             P("freed_mask", freed_str, "EXPECT: !(freed_mask & (1<<index))")
                         
         # META: Check area->check
-        area   = get_ptr_value_at(int(meta) & -4096, 'struct meta_area')
+        area   = get_ptr_value_at(int(meta) & -4096, get_musl_internal_type('struct meta_area'))
         secret = CTX['secret']
         if area['check'] == secret:
             P("area->check", _hex(area['check']))
@@ -1121,7 +1165,7 @@ class Chunkinfo(gdb.Command):
         else:
             offset = ib['offset32']
         addr  = p - (offset + 1) * UNIT
-        group = get_ptr_value_at(addr, 'struct group')
+        group = get_ptr_value_at(addr, get_musl_internal_type('struct group'))
         
         # Display group and (out-band) meta information
         try:
